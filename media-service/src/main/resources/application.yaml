@@ -1,0 +1,78 @@
+server:
+  port: ${SD_MEDIA_PORT:8083}
+  shutdown: graceful
+  tomcat:
+    threads:
+      max: 32
+    max-connections: 64
+    accept-count: 32
+spring:
+  application:
+    name: media-service
+  mvc:
+    problemdetails:
+      enabled: true
+  task:
+    scheduling:
+      pool:
+        size: 2
+  datasource:
+    url: ${SD_MEDIA_DB_URL}
+    username: ${SD_MEDIA_DB_USER}
+    password: ${SD_MEDIA_DB_PASSWORD}
+    hikari:
+      maximum-pool-size: 8
+      connection-timeout: 3000
+  servlet:
+    multipart:
+      max-file-size: ${SD_MEDIA_MAX_BYTES:10485760}B
+      max-request-size: 11MB
+      file-size-threshold: 11MB
+  kafka:
+    bootstrap-servers: ${SD_MEDIA_KAFKA_BOOTSTRAP_SERVERS}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 1
+        request.timeout.ms: 5000
+        delivery.timeout.ms: 10000
+        max.block.ms: 3000
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+      group:
+        readiness:
+          include: readinessState,db,privateStorage,kafkaDelivery
+media:
+  service-token: ${SD_MEDIA_SERVICE_TOKEN}
+  issuer: ${SD_MEDIA_AUTH_ISSUER}
+  audience: ${SD_MEDIA_AUTH_AUDIENCE:student-discounts-api}
+  jwks-uri: ${SD_MEDIA_AUTH_JWK_SET_URI}
+  workflow-topic: ${SD_MEDIA_WORKFLOW_TOPIC:submission.workflow.v1}
+  workers-enabled: ${SD_MEDIA_WORKERS_ENABLED:true}
+  outbox-enabled: ${SD_MEDIA_OUTBOX_ENABLED:true}
+  storage:
+    endpoint: ${SD_MEDIA_S3_ENDPOINT}
+    region: ${SD_MEDIA_S3_REGION:us-east-1}
+    bucket: ${SD_MEDIA_S3_BUCKET:media-private}
+    access-key: ${SD_MEDIA_S3_ACCESS_KEY}
+    secret-key: ${SD_MEDIA_S3_SECRET_KEY}
+    create-bucket: ${SD_MEDIA_S3_CREATE_BUCKET:false}
+  limits:
+    max-bytes: ${SD_MEDIA_MAX_BYTES:10485760}
+    max-dimension: ${SD_MEDIA_MAX_DIMENSION:4096}
+    max-pixels: ${SD_MEDIA_MAX_PIXELS:8000000}
+    upload-concurrency: ${SD_MEDIA_UPLOAD_CONCURRENCY:2}
+    preview-concurrency: ${SD_MEDIA_PREVIEW_CONCURRENCY:4}
+    requests-per-minute: ${SD_MEDIA_REQUESTS_PER_MINUTE:120}
+    uploads-per-day: ${SD_MEDIA_UPLOADS_PER_DAY:100}

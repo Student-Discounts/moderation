@@ -1,0 +1,44 @@
+plugins {
+    id 'base'
+    id 'org.springframework.boot' version '4.1.2' apply false
+    id 'io.spring.dependency-management' version '1.1.7' apply false
+}
+
+subprojects {
+    group = 'org.studentdiscounts'
+    version = '0.1.0-SNAPSHOT'
+    repositories { mavenCentral() }
+    configurations { javaFormatter }
+    dependencies { javaFormatter 'com.google.googlejavaformat:google-java-format:2.0.0' }
+    plugins.withId('java') {
+        java { toolchain { languageVersion = JavaLanguageVersion.of(25) } }
+        tasks.withType(Test).configureEach {
+            useJUnitPlatform()
+            maxParallelForks = 1
+            testLogging { events 'failed', 'skipped'; exceptionFormat = 'full' }
+        }
+        tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }
+
+        ['javaFormat', 'javaFormatCheck'].each { name ->
+            tasks.register(name, JavaExec) {
+                group = 'formatting'
+                classpath = configurations.javaFormatter
+                mainClass = 'com.google.googlejavaformat.java.Main'
+                javaLauncher = javaToolchains.launcherFor {
+                    languageVersion = JavaLanguageVersion.of(25)
+                }
+                jvmArgs = ['api', 'file', 'parser', 'tree', 'util', 'code'].collect {
+                    "--add-exports=jdk.compiler/com.sun.tools.javac.${it}=ALL-UNNAMED"
+                }
+                doFirst {
+                    args = name == 'javaFormat' ? ['--replace'] : ['--dry-run', '--set-exit-if-changed']
+                    args += sourceSets.collectMany { it.allJava.files }.sort().collect { it.absolutePath }
+                }
+            }
+        }
+        tasks.named('check') { dependsOn 'javaFormatCheck' }
+    }
+}
+
+tasks.named('check') { dependsOn subprojects.collect { "${it.path}:check" } }
+tasks.named('assemble') { dependsOn subprojects.collect { "${it.path}:assemble" } }

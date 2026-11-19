@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:student-discounts:moderation:events:v1",
+  "title": "Moderation-owned observations — moderation.events.v1",
+  "description": "Key reportId; stable eventId, at-least-once. These are observations, not visibility or Submission commands. All events are emitted transactionally with report/audit state. Report target UUID is an unverified cross-service reference.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["eventId", "eventType", "schemaVersion", "producer", "occurredAt", "correlationId", "data"],
+  "properties": {
+    "eventId": {"type": "string", "format": "uuid"},
+    "eventType": {"enum": ["ReportCreated", "ReportTriaged", "ReportEscalated", "ReportResolved"]},
+    "schemaVersion": {"const": 1},
+    "producer": {"const": "moderation"},
+    "occurredAt": {"type": "string", "format": "date-time"},
+    "correlationId": {"type": "string", "pattern": "^[A-Za-z0-9._:-]{1,64}$"},
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reportId", "submissionId", "actorId", "category", "reason"],
+      "properties": {
+        "reportId": {"type": "string", "format": "uuid"},
+        "submissionId": {"type": "string", "format": "uuid"},
+        "actorId": {"type": "string", "format": "uuid"},
+        "category": {"enum": ["OUTDATED", "CLOSED", "DISCOUNT_STOPPED", "MISLEADING", "ABUSE", "OTHER"]},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 2000}
+      }
+    }
+  }
+}

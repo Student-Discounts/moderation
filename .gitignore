@@ -1,0 +1,7 @@
+.gradle/
+**/build/
+.env
+*.pem
+*.log
+backups/
+.DS_Store
