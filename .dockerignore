@@ -1,0 +1,9 @@
+**
+!moderation-service/
+!moderation-service/build/
+!moderation-service/build/libs/
+!moderation-service/build/libs/*.jar
+!media-service/
+!media-service/build/
+!media-service/build/libs/
+!media-service/build/libs/*.jar

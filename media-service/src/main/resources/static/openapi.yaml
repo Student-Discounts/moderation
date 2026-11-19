@@ -1,0 +1,188 @@
+openapi: 3.1.0
+info:
+  title: Private Media Service
+  version: 1.0.0
+  description: |
+    Real JPEG/PNG codec validation and fresh PNG re-encoding, NOT antivirus or malware scanning.
+    Antivirus is unavailable; CLEAN means the bounded codec pipeline succeeded, not an antivirus verdict.
+    Originals remain in private S3 quarantine and are NEVER served or presigned. Proof is never public.
+    Only the owner or MODERATOR/SENIOR_MODERATOR may inspect metadata or a CLEAN preview.
+    Uploads are asynchronous, durable and idempotent. Idempotency-Key scopes actor + POST route;
+    raw bytes, original filename and declared MIME are fingerprinted. Replays return the original
+    QUARANTINED receipt; changed bytes or metadata under the same key return 409.
+    Default maximum upload 10 MiB, 4096 pixels per dimension and 8 million pixels total.
+    Workers read image header dimensions before decoding and strip all original metadata/EXIF.
+    A single durable decoder runs per process; PostgreSQL leases recover interrupted work.
+    Infrastructure errors retry, never synthesize CLEAN or REJECTED. Private orphan objects may remain
+    after ambiguous storage/database failures; do not expire referenced originals or derivatives.
+    Each committed status revision publishes MediaAssetChecked schemaVersion 1 to submission.workflow.v1
+    keyed by media UUID. Outbox delivery is ordered per asset, at least once with stable eventId.
+    Consumers MUST deduplicate eventId. Producers require broker ACLs/TLS/SASL outside local profile.
+servers:
+  - url: http://localhost:8083
+security:
+  - accessToken: []
+paths:
+  /api/v1/media-assets:
+    post:
+      operationId: uploadMediaAsset
+      summary: Upload a private quarantined JPEG or PNG owned by authenticated subject
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: {type: string, pattern: '^[A-Za-z0-9._:-]{1,128}$'}
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [file]
+              properties:
+                file: {type: string, format: binary}
+            encoding:
+              file:
+                contentType: image/png, image/jpeg
+      responses:
+        '202':
+          description: Durable quarantined upload receipt (also returned on exact replay)
+          headers:
+            Location: {schema: {type: string}}
+            X-Correlation-ID: {schema: {type: string}}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/UploadReceipt'}
+        '400': {$ref: '#/components/responses/Problem'}
+        '401': {$ref: '#/components/responses/Problem'}
+        '403': {$ref: '#/components/responses/Problem'}
+        '409': {$ref: '#/components/responses/Problem'}
+        '413': {$ref: '#/components/responses/Problem'}
+        '415': {$ref: '#/components/responses/Problem'}
+        '422': {$ref: '#/components/responses/Problem'}
+        '429': {$ref: '#/components/responses/Problem'}
+        '503': {$ref: '#/components/responses/Problem'}
+  /api/v1/media-assets/{id}:
+    get:
+      operationId: getPrivateMediaMetadata
+      parameters:
+        - $ref: '#/components/parameters/AssetId'
+        - $ref: '#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: Safe owner/reviewer metadata, no filename, checksum, storage key or original URL
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Metadata'}
+        '401': {$ref: '#/components/responses/Problem'}
+        '404': {$ref: '#/components/responses/Problem'}
+        '429': {$ref: '#/components/responses/Problem'}
+        '503': {$ref: '#/components/responses/Problem'}
+  /api/v1/media-assets/{id}/preview:
+    get:
+      operationId: previewPrivateCleanMedia
+      parameters:
+        - $ref: '#/components/parameters/AssetId'
+      responses:
+        '200':
+          description: Safe fresh PNG derivative; never original. Owner/reviewer only.
+          headers:
+            Cache-Control: {schema: {const: 'no-store, private'}}
+            X-Content-Type-Options: {schema: {const: nosniff}}
+          content:
+            image/png:
+              schema: {type: string, format: binary}
+        '401': {$ref: '#/components/responses/Problem'}
+        '404': {$ref: '#/components/responses/Problem'}
+        '409': {$ref: '#/components/responses/Problem'}
+        '429': {$ref: '#/components/responses/Problem'}
+        '503': {$ref: '#/components/responses/Problem'}
+  /media/v1/assets/{id}:
+    get:
+      operationId: getMediaConsumerContract
+      summary: Submission's actual service-only media contract
+      description: User JWTs are insufficient. Dedicated service credential only; never returns proof or storage data.
+      security:
+        - serviceToken: []
+      parameters:
+        - $ref: '#/components/parameters/AssetId'
+      responses:
+        '200':
+          description: Authoritative current media status and owner; caller enforces expected ownership
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ConsumerMetadata'}
+        '401': {$ref: '#/components/responses/Problem'}
+        '404': {$ref: '#/components/responses/Problem'}
+        '503': {$ref: '#/components/responses/Problem'}
+components:
+  securitySchemes:
+    accessToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: External auth RS256 JWKS; issuer, audience, exp and canonical UUID sub validated; roles array required
+    serviceToken:
+      type: apiKey
+      in: header
+      name: X-Service-Token
+      description: Required SD_MEDIA_SERVICE_TOKEN; 32-256 visible ASCII, constant-time digest comparison, duplicate headers rejected
+  parameters:
+    AssetId:
+      in: path
+      name: id
+      required: true
+      schema: {type: string, format: uuid}
+    CorrelationId:
+      in: header
+      name: X-Correlation-ID
+      schema: {type: string, pattern: '^[A-Za-z0-9._:-]{1,64}$'}
+  responses:
+    Problem:
+      description: RFC 9457 error; foreign assets are indistinguishable from absent assets. 429 includes Retry-After.
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+  schemas:
+    Status: {type: string, enum: [QUARANTINED, PROCESSING, CLEAN, REJECTED]}
+    ConsumerMetadata:
+      type: object
+      additionalProperties: false
+      required: [id, ownerId, status, revision]
+      properties:
+        id: {type: string, format: uuid}
+        ownerId: {type: string, format: uuid}
+        status: {$ref: '#/components/schemas/Status'}
+        revision: {type: integer, minimum: 0}
+    UploadReceipt:
+      type: object
+      required: [id, ownerId, status, revision, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        ownerId: {type: string, format: uuid}
+        status: {const: QUARANTINED}
+        revision: {const: 0}
+        createdAt: {type: string, format: date-time}
+    Metadata:
+      type: object
+      required: [id, ownerId, status, revision, createdAt]
+      properties:
+        id: {type: string, format: uuid}
+        ownerId: {type: string, format: uuid}
+        status: {$ref: '#/components/schemas/Status'}
+        revision: {type: integer, minimum: 0}
+        createdAt: {type: string, format: date-time}
+        width: {type: [integer, 'null'], minimum: 1}
+        height: {type: [integer, 'null'], minimum: 1}
+        rejectionCode: {type: [string, 'null']}
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: {type: string}
+        title: {type: string}
+        status: {type: integer}
+        detail: {type: string}
+        code: {type: string}

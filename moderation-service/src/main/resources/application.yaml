@@ -1,0 +1,58 @@
+server:
+  port: ${SERVER_PORT:8082}
+  shutdown: graceful
+  tomcat:
+    threads.max: 100
+    max-connections: 200
+    accept-count: 100
+    max-http-form-post-size: 262144
+spring:
+  application.name: moderation-service
+  mvc.problemdetails.enabled: true
+  jackson.deserialization.fail-on-unknown-properties: true
+  datasource:
+    url: ${SD_MODERATION_DB_URL}
+    username: ${SD_MODERATION_DB_USER}
+    password: ${SD_MODERATION_DB_PASSWORD}
+    hikari.maximum-pool-size: 10
+  security.oauth2.resourceserver.jwt:
+    issuer-uri: ${SD_MODERATION_AUTH_ISSUER}
+    jwk-set-uri: ${SD_MODERATION_AUTH_JWK_SET_URI}
+    audiences: student-discounts-api
+    jws-algorithms: RS256
+    authorities-claim-name: roles
+    authority-prefix: ROLE_
+  kafka:
+    bootstrap-servers: ${SD_MODERATION_KAFKA_BOOTSTRAP_SERVERS}
+    consumer:
+      group-id: ${SD_MODERATION_KAFKA_GROUP_ID:moderation-submission-v1}
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      properties:
+        max.poll.records: 50
+        max.partition.fetch.bytes: 1048576
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      properties:
+        enable.idempotence: true
+        delivery.timeout.ms: 10000
+        request.timeout.ms: 5000
+        max.block.ms: 5000
+management:
+  endpoints.web.exposure.include: health,info,metrics,prometheus
+  endpoint.health:
+    probes.enabled: true
+    show-details: never
+    group.readiness.include: readinessState,db,kafka
+  metrics.distribution.percentiles-histogram.http.server.requests: true
+moderation:
+  max-body-bytes: ${SD_MODERATION_MAX_BODY_BYTES:262144}
+  requests-per-minute: ${SD_MODERATION_REQUESTS_PER_MINUTE:120}
+  outbox-enabled: ${SD_MODERATION_OUTBOX_ENABLED:true}
+  listener-enabled: ${SD_MODERATION_LISTENER_ENABLED:true}
+  local-topics-enabled: false
+  send-timeout-ms: 12000

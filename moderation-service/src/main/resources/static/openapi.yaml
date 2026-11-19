@@ -1,0 +1,380 @@
+openapi: 3.1.0
+info:
+  title: Moderation Service
+  version: 1.0.0
+  description: |
+    Human review, immutable Submission projections, decisions, reports and append-only audit.
+    Commands return PENDING, not accepted Submission state. Wait for committed SubmissionStatusChanged;
+    detail exposes command CONFIRMED/REJECTED/SUPERSEDED and failure. Never decide before the claim
+    is confirmed IN_REVIEW. An unassigned already IN_REVIEW snapshot can be claimed locally without
+    sending an invalid ReviewStarted. Every new snapshot cancels the old assignment and pending command.
+    Risk is null/NOT_PROVIDED: no genuine risk provider contract exists in the actual services.
+    No synthetic scores, duplicate matches or file-safety claims are generated.
+    Corrections are owned exclusively by Submission: POST http://localhost:8081/api/v1/submissions/{id}/versions
+    with the reviewer bearer token, Submission's own current If-Match, Idempotency-Key and
+    {reviewedVersionId, payload, expectedCatalogRowVersion (CHANGE only)}. Fetch the new Submission
+    ETag there, wait for the immutable version event here, then claim the exact new tuple before deciding.
+    Moderation never edits snapshots or creates Submission versions. Catalog alone owns publication,
+    suspension, archival and actual visibility. There is no Catalog implementation or invented lifecycle
+    request consumer here. Senior REOPEN is supported only for an already committed SUSPENDED Submission.
+    Ordinary reports are unverified observations and never hide anything or change Submission status.
+servers:
+  - url: http://localhost:8082
+security:
+  - bearerAuth: []
+paths:
+  /api/v1/moderation/queue:
+    get:
+      operationId: reviewQueue
+      summary: Reviewer queue, UUID keyset pagination (descending)
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Before'
+        - name: escalatedOnly
+          in: query
+          schema: {type: boolean, default: false}
+      responses:
+        '200':
+          description: Up to limit entries, use last submissionId as before
+          content:
+            application/json:
+              schema: {type: array, items: {$ref: '#/components/schemas/Review'}}
+        default: {$ref: '#/components/responses/Problem'}
+  /api/v1/moderation/reviews/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get:
+      operationId: reviewDetail
+      responses:
+        '200':
+          description: Current immutable snapshot and up to 100 most recent commands, including rejection failures
+          headers:
+            ETag: {schema: {type: string}, description: Quoted local row version, not Submission row version}
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Review'
+                  - type: object
+                    properties:
+                      currentSnapshot: {$ref: '#/components/schemas/Snapshot'}
+                      commands: {type: array, items: {$ref: '#/components/schemas/CommandState'}}
+                      riskAssessment: {type: 'null'}
+                      riskAssessmentAvailability: {const: NOT_PROVIDED}
+        default: {$ref: '#/components/responses/Problem'}
+  /api/v1/moderation/reviews/{id}/commands:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post:
+      operationId: reviewCommand
+      description: |
+        Requires moderator/senior and nonauthor. Decisions and escalation require exact assigned reviewer,
+        confirmed IN_REVIEW and no pending command, including for seniors. CLAIM assigns an unassigned
+        tuple; escalated tuples require senior. ESCALATE is local, clears assignment and requires a reason.
+        REQUEST_EVIDENCE maps to SubmissionChangesRequested with the actual reason; no unsupported status.
+        REOPEN requires senior and committed SUSPENDED. All changes use local If-Match and durable
+        actor/method/path/key idempotency. Replay returns original response, changed fingerprint 409.
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [action, versionId, versionNo]
+              properties:
+                action: {type: string, enum: [CLAIM, APPROVE, REJECT, CHANGES_REQUESTED, REQUEST_EVIDENCE, ESCALATE, REOPEN]}
+                versionId: {type: string, format: uuid}
+                versionNo: {type: integer, minimum: 1}
+                reason: {type: [string, 'null'], maxLength: 2000, description: Nonblank required except CLAIM/APPROVE}
+      responses:
+        '202':
+          description: Command persisted; PENDING until committed event, or CONFIRMED for local escalation/reclaim
+          headers:
+            ETag: {schema: {type: string}}
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [commandId, state, localVersion]
+                properties:
+                  commandId: {type: string, format: uuid}
+                  state: {type: string, enum: [PENDING, CONFIRMED]}
+                  localVersion: {type: integer, minimum: 0}
+        default: {$ref: '#/components/responses/Problem'}
+  /api/v1/moderation/reviews/{id}/versions:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get:
+      operationId: reviewVersions
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - name: before
+          in: query
+          schema: {type: integer, minimum: 1}
+      responses:
+        '200':
+          description: Immutable snapshots descending versionNo
+          content:
+            application/json:
+              schema: {type: array, items: {$ref: '#/components/schemas/Snapshot'}}
+        default: {$ref: '#/components/responses/Problem'}
+  /api/v1/moderation/reviews/{id}/versions/{versionNo}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+      - name: versionNo
+        in: path
+        required: true
+        schema: {type: integer, minimum: 1}
+    get:
+      operationId: reviewSnapshot
+      responses:
+        '200':
+          description: Exact immutable Submission snapshot
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Snapshot'}
+        default: {$ref: '#/components/responses/Problem'}
+  /api/v1/moderation/reviews/{id}/comparison:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get:
+      operationId: reviewComparison
+      description: Recursive object diff versus preceding snapshot; arrays are reported as a single replacement. JSON Pointer paths.
+      parameters:
+        - name: versionNo
+          in: query
+          required: true
+          schema: {type: integer, minimum: 1}
+      responses:
+        '200':
+          description: Changed fields, before and after may be null
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    path: {type: string}
+                    before: {}
+                    after: {}
+        default: {$ref: '#/components/responses/Problem'}
+  /api/v1/moderation/reviews/{id}/history:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get:
+      operationId: reviewAudit
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Before'
+      responses:
+        '200':
+          description: Append-only audit, descending id. Use last id as before.
+          content:
+            application/json:
+              schema: {type: array, items: {$ref: '#/components/schemas/Audit'}}
+        default: {$ref: '#/components/responses/Problem'}
+  /api/v1/reports:
+    get:
+      operationId: ownReports
+      description: STUDENT own reports only
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Before'
+      responses:
+        '200':
+          description: Own reports descending id, use last id as before
+          content:
+            application/json:
+              schema: {type: array, items: {$ref: '#/components/schemas/Report'}}
+        default: {$ref: '#/components/responses/Problem'}
+    post:
+      operationId: createReport
+      description: STUDENT observation, target UUID is an external unverified reference; never changes visibility or review status
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [submissionId, category, description]
+              properties:
+                submissionId: {type: string, format: uuid}
+                category: {type: string, enum: [OUTDATED, CLOSED, DISCOUNT_STOPPED, MISLEADING, ABUSE, OTHER]}
+                description: {type: string, minLength: 1, maxLength: 2000}
+      responses:
+        '201':
+          description: Report created or original idempotent response
+          headers:
+            Location: {schema: {type: string}}
+            ETag: {schema: {type: string}}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Report'}
+        default: {$ref: '#/components/responses/Problem'}
+  /api/v1/reports/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get:
+      operationId: ownReport
+      description: Foreign reports return 404
+      responses:
+        '200':
+          description: Own report
+          headers:
+            ETag: {schema: {type: string}}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Report'}
+        default: {$ref: '#/components/responses/Problem'}
+  /api/v1/moderation/reports:
+    get:
+      operationId: reportTriageQueue
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Before'
+      responses:
+        '200':
+          description: Unresolved reports for reviewers
+          content:
+            application/json:
+              schema: {type: array, items: {$ref: '#/components/schemas/Report'}}
+        default: {$ref: '#/components/responses/Problem'}
+  /api/v1/moderation/reports/{id}/actions:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post:
+      operationId: triageReport
+      description: Reviewer TRIAGE/ESCALATE, senior RESOLVE. Cannot triage one's own report. Escalated reports senior only. Does not hide content.
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [action, reason]
+              properties:
+                action: {type: string, enum: [TRIAGE, ESCALATE, RESOLVE]}
+                reason: {type: string, minLength: 1, maxLength: 2000}
+      responses:
+        '200':
+          description: Updated report, durable replay returns original response
+          headers:
+            ETag: {schema: {type: string}}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Report'}
+        default: {$ref: '#/components/responses/Problem'}
+  /api/v1/moderation/consumer-failures:
+    get:
+      operationId: consumerFailures
+      description: Senior-only operational DLT visibility. Replaying requires trusted Kafka operations, retaining original eventId and tuple.
+      parameters: [{$ref: '#/components/parameters/Limit'}]
+      responses:
+        '200':
+          description: Most recent unreconciled consumer failures
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    sourceTopic: {type: string}
+                    sourcePartition: {type: integer}
+                    sourceOffset: {type: integer}
+                    eventId: {type: [string, 'null'], format: uuid}
+                    aggregateId: {type: [string, 'null'], format: uuid}
+                    errorCode: {type: string}
+                    occurredAt: {type: string, format: date-time}
+        default: {$ref: '#/components/responses/Problem'}
+components:
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer, bearerFormat: JWT}
+  parameters:
+    Id: {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+    Limit: {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
+    Before: {name: before, in: query, schema: {type: string, format: uuid}}
+    IfMatch: {name: If-Match, in: header, required: true, schema: {type: string, pattern: '^"[0-9]{1,18}"$'}, description: Exact quoted local ETag; missing 428, stale 412}
+    IdempotencyKey: {name: Idempotency-Key, in: header, required: true, schema: {type: string, pattern: '^[A-Za-z0-9._:-]{1,128}$'}}
+  responses:
+    Problem:
+      description: RFC9457 error; 400 malformed, 401 token, 403 permission, 404 private/absent, 409 state or idempotency, 412 stale ETag, 413 body cap, 422 validation, 428 missing ETag, 429 rate limit (Retry-After), 503 dependency
+      content:
+        application/problem+json:
+          schema:
+            type: object
+            properties:
+              type: {type: string}
+              title: {type: string}
+              status: {type: integer}
+              detail: {type: string}
+              code: {type: string}
+              correlationId: {type: string}
+  schemas:
+    Review:
+      type: object
+      properties:
+        submissionId: {type: string, format: uuid}
+        authorId: {type: [string, 'null'], format: uuid}
+        versionId: {type: [string, 'null'], format: uuid}
+        versionNo: {type: integer}
+        status: {type: string}
+        submissionRowVersion: {type: integer}
+        localVersion: {type: integer}
+        reviewerId: {type: [string, 'null'], format: uuid}
+        pendingCommandId: {type: [string, 'null'], format: uuid}
+        escalated: {type: boolean}
+    Snapshot:
+      type: object
+      properties:
+        versionId: {type: string, format: uuid}
+        submissionId: {type: string, format: uuid}
+        versionNo: {type: integer, minimum: 1}
+        payload: {type: object, description: Actual immutable Submission payload-v1, not rewritten by Moderation}
+        payloadSchemaVersion: {const: 1}
+        contentSha256: {type: string, pattern: '^[a-f0-9]{64}$'}
+        baseOfferRowVersion: {type: [integer, 'null']}
+        authorId: {type: string, format: uuid}
+        occurredAt: {type: string, format: date-time}
+    CommandState:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        state: {type: string, enum: [PENDING, CONFIRMED, REJECTED, SUPERSEDED]}
+        action: {type: string}
+        versionId: {type: string, format: uuid}
+        versionNo: {type: integer}
+        expectedSubmissionVersion: {type: integer}
+        actorId: {type: string, format: uuid}
+        reason: {type: [string, 'null']}
+        failure: {type: [string, 'null']}
+        createdAt: {type: string, format: date-time}
+        resolvedAt: {type: [string, 'null'], format: date-time}
+    Report:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        reporterId: {type: string, format: uuid}
+        submissionId: {type: string, format: uuid}
+        category: {type: string}
+        description: {type: string}
+        state: {type: string, enum: [OPEN, TRIAGED, ESCALATED, RESOLVED]}
+        rowVersion: {type: integer}
+        assignedTo: {type: [string, 'null'], format: uuid}
+        resolution: {type: [string, 'null']}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    Audit:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        submissionId: {type: [string, 'null'], format: uuid}
+        actorId: {type: [string, 'null'], format: uuid}
+        action: {type: string}
+        detail: {type: object}
+        correlationId: {type: string}
+        occurredAt: {type: string, format: date-time}
