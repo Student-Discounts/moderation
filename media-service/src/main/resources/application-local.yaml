@@ -1,0 +1,16 @@
+spring:
+  datasource:
+    url: ${SD_MEDIA_DB_URL:jdbc:postgresql://localhost:5435/media}
+    username: ${SD_MEDIA_DB_USER:media}
+    password: ${SD_MEDIA_DB_PASSWORD:media}
+  kafka:
+    bootstrap-servers: ${SD_MEDIA_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+media:
+  service-token: ${SD_MEDIA_SERVICE_TOKEN:local-media-service-token-change-me}
+  issuer: ${SD_MEDIA_AUTH_ISSUER:http://localhost:8080}
+  jwks-uri: ${SD_MEDIA_AUTH_JWK_SET_URI:http://localhost:8080/.well-known/jwks.json}
+  storage:
+    endpoint: ${SD_MEDIA_S3_ENDPOINT:http://localhost:9000}
+    access-key: ${SD_MEDIA_S3_ACCESS_KEY:minio-local}
+    secret-key: ${SD_MEDIA_S3_SECRET_KEY:minio-local-secret-change-me}
+    create-bucket: ${SD_MEDIA_S3_CREATE_BUCKET:true}

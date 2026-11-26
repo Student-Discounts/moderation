@@ -1,0 +1,2 @@
+rootProject.name = 'moderation-and-media'
+include 'moderation-service', 'media-service'
